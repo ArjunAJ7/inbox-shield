@@ -5,6 +5,8 @@
 const API = 'https://clocked.rezolve.ai/clocked/pipeline';
 const MAX_CHARS = 4000;
 const LIMIT_PER_HOUR = 20;
+const DAILY_CAP = 300; // best effort, per server instance, to keep a free trial from running out
+let day = { d: '', n: 0 };
 const hits = new Map();
 
 function limited(ip) {
@@ -130,8 +132,8 @@ export async function triage(text, key) {
       Object.entries(facts.fields || {}).map(([k, v]) => [k, v && v.value != null ? { value: v.value, confidence: v.confidence } : null])
     ),
     action: flagged
-      ? 'Flagged text removed. Forward the safe text below to your assistant, and let a person review the removed text.'
-      : 'No instruction attack found. Safe to forward the safe text below.',
+      ? 'Flagged text was removed. The filtered text below is a reviewed copy, not a guarantee. Have a person look at the removed text and check anything important before an assistant acts on it.'
+      : 'No instruction attack was found by the checks. The filtered text below has personal data masked. Detection can miss things, so keep a person in the loop for anything important.',
     credits: g.credits + p.credits,
   };
 }
@@ -152,6 +154,10 @@ export default {
       if (!text) return json({ error: 'Paste a message first.' }, 400);
       if (text.length > MAX_CHARS) return json({ error: 'Keep it under ' + MAX_CHARS + ' characters for this demo.' }, 400);
       const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || 'local';
+      const today = new Date().toISOString().slice(0, 10);
+      if (day.d !== today) day = { d: today, n: 0 };
+      if (day.n >= DAILY_CAP) return json({ error: 'The demo has reached its daily limit. Try again tomorrow.' }, 429);
+      day.n++;
       if (limited(ip)) return json({ error: 'Demo limit reached (' + LIMIT_PER_HOUR + ' per hour). Try again later.' }, 429);
       try { return json(await triage(text, key)); }
       catch (e) { return json({ error: String(e.message || e) }, 502); }
@@ -197,7 +203,7 @@ a{color:var(--acc)}
 <div id="err" class="err"></div></div>
 <div class="card" id="out"><p style="color:var(--mute);margin:0">Pick an example or paste a message, then run it. Results appear here.</p></div>
 </div>
-<p class="foot">Built on the <a href="https://clocked.rezolve.ai/docs">Clocked API</a> (Guard, Protect, Decide, Extract). Demo is limited to 20 runs per hour per visitor. Detection can miss things, so keep a person in the loop for anything important. <a href="https://github.com/ArjunAJ7/inbox-shield">Source</a>.</p>
+<p class="foot">Built on the <a href="https://clocked.rezolve.ai/docs">Clocked API</a> (Guard, Protect, Decide, Extract). Messages here are synthetic examples. Demo is limited to 20 runs per hour per visitor and 300 per day overall. Detection can miss things, so keep a person in the loop for anything important. <a href="https://github.com/ArjunAJ7/inbox-shield">Source</a>.</p>
 </main>
 <script>
 const EX={
@@ -227,7 +233,7 @@ function render(d){
   d.pii.forEach(p=>h+='<span class="chip">'+p.n+' '+esc(p.type)+' masked</span>');h+='</div>';
   h+='<p style="margin:0 0 6px">'+esc(d.action)+'</p>';
   if(g.removed.length)h+='<h3>Removed text (for a person to review)</h3><pre class="rm">'+g.removed.map(esc).join('\n')+'</pre>';
-  h+='<h3>Safe text for your assistant</h3><pre>'+esc(d.safe_text)+'</pre>';
+  h+='<h3>Filtered text (personal data masked)</h3><pre>'+esc(d.safe_text)+'</pre>';
   h+='<h3>Facts found</h3><table>';
   for(const k in d.facts){const f=d.facts[k];h+='<tr><td>'+esc(k.replace('_',' '))+'</td><td>'+(f?esc(f.value):'<span style="color:var(--mute)">not stated</span>')+'</td></tr>'}
   h+='</table><p class="foot" style="margin-bottom:0">'+d.credits+' Clocked credits used for this run.</p>';
