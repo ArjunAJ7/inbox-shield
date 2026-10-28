@@ -1,0 +1,9 @@
+{
+  "name": "inbox-shield",
+  "version": "1.0.0",
+  "description": "Triage inbound messages with the Clocked API: remove instruction attacks, mask personal data, route and extract facts.",
+  "type": "module",
+  "main": "worker.js",
+  "scripts": { "start": "node server.js" },
+  "license": "MIT"
+}
