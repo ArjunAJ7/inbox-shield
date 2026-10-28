@@ -14,7 +14,7 @@ You paste a message. Inbox Shield:
 3. **Decide** (`/decide`) routes the ticket (refund, shipping, technical, other) and says whether it is urgent, with probabilities.
 4. **Extract** (`/extract`) copies out the order or ticket number, the product and any deadline, verbatim.
 
-The output is a "safe text" block you can hand to an assistant, plus the route, urgency and facts. The Clocked results change what the app does: flagged text is removed, personal data is masked, and the route and urgency decide where the ticket goes.
+The output is a "filtered text" block (personal data masked, flagged sentences removed) that a person can review before an assistant uses it, plus the route, urgency and facts. The Clocked results change what the app does: flagged text is removed, personal data is masked, and the route and urgency decide where the ticket goes.
 
 Two Clocked calls per run (Guard first, then Protect, Decide and Extract as one pipeline on the cleaned text).
 
@@ -44,6 +44,7 @@ It also deploys as a Cloudflare Worker (`worker.js` is the whole app, `wrangler.
 ## Limits
 
 - Detection can miss things. Treat it as a first filter and keep a person in the loop for anything important.
+- The filtered text is reviewed by Clocked checks, not guaranteed safe. Keep a person in the loop, and do not paste real private messages into the public demo; the examples are synthetic.
 - The demo rate limit is kept in memory per server instance, so it is a courtesy limit, not a hard guarantee.
 - Built during the challenge window with AI coding assistance. All code in this repository was written for this project.
 
