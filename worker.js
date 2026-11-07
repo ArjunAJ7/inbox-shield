@@ -119,20 +119,26 @@ export async function triage(text, key) {
   const urgent = route.answers.urgent.noul;
 
   // Call 3: Fill. Build the structured ticket record from the masked text, so the
-  // record never carries personal data the Protect step hid. Category and urgency use
+  // record is built only from text the Protect step masked. Category and urgency use
   // the exact same definitions as the routing check above; if Fill disagrees with the
   // routing check the record says so instead of silently contradicting it.
   // Fill failure never breaks the run: the record is then null and the page says so.
-  const masked = pii.anonymized_text || cleaned;
+  // Masking is mandatory: if Protect returns no valid anonymized_text (missing field
+  // or wrong type), the unmasked text must NOT reach the page or the Fill call. The
+  // verdict, route and facts still render; the filtered-text block and record do not.
+  const mask_ok = typeof pii.anonymized_text === 'string' && pii.anonymized_text.trim().length > 0;
+  const masked = mask_ok ? pii.anonymized_text : null;
   let record = null;
   let record_error = null;
   let fill_credits = 0;
-  if (!masked || masked.trim().length < 25 || masked.trim() === '(empty after removing flagged text)') {
+  if (!mask_ok) {
+    record_error = 'personal-data masking was unavailable, so no record was filled';
+  } else if (masked.trim().length < 25 || masked.trim() === '(empty after removing flagged text)') {
     // The whole message (or nearly all of it) was flagged and removed: nothing to fill a record from.
     record_error = 'nothing meaningful left to record after removing flagged text';
   } else try {
     const f = await pipeline(key, {
-      text: masked || '(empty after removing flagged text)',
+      text: masked,
       instructions: 'Fill a support ticket record. Copy values verbatim from the text; if a value is masked or not stated, leave it unknown. Never invent names, numbers or dates.',
       fields: {
         customer_name: { type: 'extract', description: 'Full name of the person who wrote the message', infer: false },
@@ -208,15 +214,20 @@ export async function triage(text, key) {
     },
     record,
     record_error,
-    safe_text: pii.anonymized_text || cleaned,
+    safe_text: masked,
+    mask_ok,
     pii: Object.entries(pii.counts || {}).map(([type, n]) => ({ type, n })),
     route: { category: cat.choice, confidence: cat.confidence, probabilities: cat.probabilities, urgent },
     facts: Object.fromEntries(
       Object.entries(facts.fields || {}).map(([k, v]) => [k, v && v.value != null ? { value: v.value, confidence: v.confidence } : null])
     ),
-    action: flagged
-      ? 'Flagged text was removed. The filtered text below is a reviewed copy, not a guarantee. Have a person look at the removed text and check anything important before an assistant acts on it.'
-      : 'No instruction attack was found by the checks. The filtered text below has personal data masked. Detection can miss things, so keep a person in the loop for anything important.',
+    action: (flagged
+      ? 'Flagged text was removed. '
+      : 'No instruction attack was found by the checks. ') + (mask_ok
+      ? (flagged
+        ? 'The filtered text below is an automatically filtered draft, not a guarantee. Have a person look at the removed text and check anything important before an assistant acts on it.'
+        : 'The filtered text below has personal data masked. Detection can miss things, so keep a person in the loop for anything important.')
+      : 'The personal-data masking step did not return a result, so the filtered text and the ticket record are not shown. Detection can miss things, so keep a person in the loop for anything important.'),
     credits: g.credits + p.credits + fill_credits,
   };
 }
@@ -316,7 +327,8 @@ function render(d){
   d.pii.forEach(p=>h+='<span class="chip">'+p.n+' '+esc(p.type)+' masked</span>');h+='</div>';
   h+='<p style="margin:0 0 6px">'+esc(d.action)+'</p>';
   if(g.removed.length)h+='<h3>Removed text (for a person to review)</h3><pre class="rm">'+g.removed.map(esc).join('\n')+'</pre>';
-  h+='<h3>Filtered text (personal data masked)</h3><pre>'+esc(d.safe_text)+'</pre>';
+  if(d.safe_text)h+='<h3>Filtered text (personal data masked)</h3><pre>'+esc(d.safe_text)+'</pre>';
+  else h+='<h3>Filtered text</h3><p style="margin:0;color:var(--mute)">Not shown: the masking step did not return a result, so the unmasked text stays hidden. The verdict, route and facts above are unaffected.</p>';
   h+='<h3>Facts found</h3><table>';
   for(const k in d.facts){const f=d.facts[k];h+='<tr><td>'+esc(k.replace('_',' '))+'</td><td>'+(f?esc(f.value):'<span style="color:var(--mute)">not stated</span>')+'</td></tr>'}
   h+='</table>';

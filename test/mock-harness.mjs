@@ -47,6 +47,8 @@ const SCEN = {
   masked: { guard: guardBenign, pipe: pipeResult({ maskedText: 'Order A-48213 from [PERSON_1] about a blender, due Friday; the rest of the sender details were masked here', counts: { person: 1 } }), fill: fillOk({ name: null }) },
   hallucinate: { guard: guardBenign, pipe: pipeResult({ maskedText: MT, counts: { person: 1 } }), fill: fillOk({ name: null, order: 'Z-99999' }) },
   piisummary: { guard: guardBenign, pipe: pipeResult({ maskedText: MT, counts: { person: 1 } }), fill: (() => { const f = fillOk({ name: null }); f.fields.summary = { value: 'Customer requests refund, call +91 99988 87770 direct' }; return f; })() },
+  maskmissing: { guard: guardBenign, pipe: pipeResult({ maskedText: undefined }) },
+  maskinvalid: { guard: guardBenign, pipe: pipeResult({ maskedText: 42 }) },
 };
 
 const S = SCEN[scenario] || SCEN.normal;
@@ -66,14 +68,24 @@ if (UNIT) {
   const assert = (cond, msg) => { if (!cond) { console.error('FAIL: ' + msg); process.exitCode = 1; } else console.log('ok: ' + msg); };
   for (const name of Object.keys(SCEN)) {
     const cur = SCEN[name];
+    let fillCalls = 0;
     globalThis.fetch = async (url, opts) => {
       const isFill = String(url).includes('/fill');
+      if (isFill) fillCalls++;
       if (isFill && cur.fillStatus) return new Response(JSON.stringify(cur.fillBody || {}), { status: cur.fillStatus, headers: { 'Content-Type': 'application/json', 'x-clocked-credits': '0' } });
       const body = isFill ? cur.fill : (JSON.parse(opts.body).steps.length === 1 ? cur.guard : cur.pipe);
       return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json', 'x-clocked-credits': isFill ? '3' : '5' } });
     };
-    const r = await triage('sample message text', 'test-key');
-    if (name === 'fillfail') {
+    const r = await triage('sample message from priya@example.com about an order', 'test-key');
+    const leaked = JSON.stringify(r).includes('priya@example.com');
+    if (name === 'maskmissing' || name === 'maskinvalid') {
+      assert(r.record === null && r.record_error && r.record_error.includes('masking'), name + ': record skipped, masking error stated');
+      assert(r.safe_text === null && r.mask_ok === false, name + ': no unmasked text exposed');
+      assert(fillCalls === 0, name + ': Fill not called without valid masking');
+      assert(r.route && r.route.category === 'refund' && r.facts && r.facts.order_id, name + ': unaffected outputs (route, facts) preserved');
+      assert(!leaked, name + ': input personal data nowhere in response');
+      assert(r.credits === 10, name + ': credits exclude skipped fill (got ' + r.credits + ')');
+    } else if (name === 'fillfail') {
       assert(r.record === null && typeof r.record_error === 'string' && r.record_error.includes('500'), 'fillfail: record null, error carried, run survives');
       assert(r.route && r.route.category === 'refund' && r.safe_text !== undefined, 'fillfail: existing pipeline outputs preserved');
       assert(r.credits === 10, 'fillfail: credits exclude failed fill (got ' + r.credits + ')');
@@ -93,6 +105,9 @@ if (UNIT) {
     }
     if (name === 'injection') {
       assert(r.guard.removed.length === 1 && r.guard.verdict === 'injection', 'injection: flagged text removed, record still produced');
+    }
+    if (name !== 'maskmissing' && name !== 'maskinvalid') {
+      assert(!leaked, name + ': input personal data nowhere in response');
     }
   }
   console.log('UNIT DONE');

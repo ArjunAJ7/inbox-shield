@@ -1,7 +1,7 @@
 // Screenshot each mock scenario's rendered result card.
 import puppeteer from 'puppeteer-core';
 
-const scenarios = ['normal', 'injection', 'disagree', 'fillfail', 'masked'];
+const scenarios = ['normal', 'injection', 'disagree', 'fillfail', 'masked', 'hallucinate', 'piisummary', 'maskmissing', 'maskinvalid'];
 const server = (scen) => ({
   proc: Bun ? null : null,
 });
