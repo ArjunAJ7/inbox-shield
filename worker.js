@@ -3,6 +3,7 @@
 // The Clocked API key is read from env.CLOCKED_API_KEY and never sent to the browser.
 
 const API = 'https://clocked.rezolve.ai/clocked/pipeline';
+const API_FILL = 'https://clocked.rezolve.ai/clocked/fill';
 const MAX_CHARS = 4000;
 const LIMIT_PER_HOUR = 20;
 const DAILY_CAP = 300; // best effort, per server instance, to keep a free trial from running out
@@ -18,8 +19,8 @@ function limited(ip) {
   return false;
 }
 
-async function pipeline(key, body) {
-  const r = await fetch(API, {
+async function pipeline(key, body, url = API) {
+  const r = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: 'Bearer ' + key,
@@ -117,6 +118,61 @@ export async function triage(text, key) {
   const cat = route.answers.category;
   const urgent = route.answers.urgent.noul;
 
+  // Call 3: Fill. Build the structured ticket record from the masked text, so the
+  // record never carries personal data the Protect step hid. Category and urgency use
+  // the exact same definitions as the routing check above; if Fill disagrees with the
+  // routing check the record says so instead of silently contradicting it.
+  // Fill failure never breaks the run: the record is then null and the page says so.
+  const masked = pii.anonymized_text || cleaned;
+  let record = null;
+  let record_error = null;
+  let fill_credits = 0;
+  if (!masked || masked.trim().length < 25 || masked.trim() === '(empty after removing flagged text)') {
+    // The whole message (or nearly all of it) was flagged and removed: nothing to fill a record from.
+    record_error = 'nothing meaningful left to record after removing flagged text';
+  } else try {
+    const f = await pipeline(key, {
+      text: masked || '(empty after removing flagged text)',
+      instructions: 'Fill a support ticket record. Copy values verbatim from the text; if a value is masked or not stated, leave it unknown. Never invent names, numbers or dates.',
+      fields: {
+        customer_name: { type: 'extract', description: 'Full name of the person who wrote the message', infer: false },
+        order_id: { type: 'extract', description: 'The order, ticket or reference number', infer: false },
+        product: { type: 'extract', description: 'The product or service the message is about', infer: false },
+        deadline: { type: 'extract', description: 'Any date or deadline the sender states', infer: false },
+        category: {
+          type: 'choice',
+          description: 'The ticket category. refund: the sender asks for money back or a refund. shipping: a delivery, tracking or lost parcel problem. technical: a product, app or account is not working. other: anything else, including thanks and general questions.',
+          options: ['refund', 'shipping', 'technical', 'other'],
+        },
+        urgent: {
+          type: 'yes_no',
+          description: 'Does the sender state a deadline, or say they cannot use the product or service until this is fixed?',
+        },
+        summary: { type: 'generate', description: 'One neutral line describing the request, with no personal data', max_tokens: 40 },
+      },
+    }, API_FILL);
+    fill_credits = f.credits;
+    const fields = (f.j && f.j.fields) || {};
+    const val = (k) => (fields[k] && fields[k].value != null ? fields[k].value : null);
+    const fill_cat = val('category');
+    const fill_urgent = fields.urgent && typeof fields.urgent.value === 'boolean' ? fields.urgent.value : null;
+    const disagreements = [];
+    if (fill_cat != null && fill_cat !== cat.choice) disagreements.push('category: record says "' + fill_cat + '", routing check says "' + cat.choice + '"');
+    if (fill_urgent != null && fill_urgent !== (urgent >= 0.5)) disagreements.push('urgency: record says "' + (fill_urgent ? 'urgent' : 'not urgent') + '", routing check says "' + (urgent >= 0.5 ? 'urgent' : 'not urgent') + '"');
+    record = {
+      customer_name: val('customer_name'),
+      order_id: val('order_id'),
+      product: val('product'),
+      deadline: val('deadline'),
+      category: fill_cat,
+      urgent: fill_urgent,
+      summary: val('summary'),
+      disagreements,
+    };
+  } catch (e) {
+    record_error = String(e.message || e);
+  }
+
   return {
     guard: {
       verdict: guard.verdict,
@@ -125,6 +181,8 @@ export async function triage(text, key) {
       score: guard.injection,
       removed,
     },
+    record,
+    record_error,
     safe_text: pii.anonymized_text || cleaned,
     pii: Object.entries(pii.counts || {}).map(([type, n]) => ({ type, n })),
     route: { category: cat.choice, confidence: cat.confidence, probabilities: cat.probabilities, urgent },
@@ -134,7 +192,7 @@ export async function triage(text, key) {
     action: flagged
       ? 'Flagged text was removed. The filtered text below is a reviewed copy, not a guarantee. Have a person look at the removed text and check anything important before an assistant acts on it.'
       : 'No instruction attack was found by the checks. The filtered text below has personal data masked. Detection can miss things, so keep a person in the loop for anything important.',
-    credits: g.credits + p.credits,
+    credits: g.credits + p.credits + fill_credits,
   };
 }
 
@@ -183,7 +241,7 @@ textarea{width:100%;min-height:230px;border:1px solid var(--line);border-radius:
 button{font:inherit;border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;cursor:pointer}
 button.go{background:var(--acc);border-color:var(--acc);color:#fff;font-weight:600}button:disabled{opacity:.55;cursor:wait}
 .banner{border-radius:8px;padding:10px 12px;font-weight:600;margin-bottom:12px}
-.banner.bad{background:#fdecea;color:var(--bad)}.banner.ok{background:#e7f6ee;color:var(--ok)}
+.banner.bad{background:#fdecea;color:var(--bad)}.banner.ok{background:#e7f6ee;color:var(--ok)}.banner.warn{background:#fef3e8;color:var(--warn)}
 .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.chip{border:1px solid var(--line);border-radius:99px;padding:3px 11px;font-size:13px;background:#fafbfc}
 .chip.hot{border-color:#f0b4ae;background:#fdecea;color:var(--bad)}
 h3{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute);margin:14px 0 6px}
@@ -194,7 +252,7 @@ table{border-collapse:collapse;width:100%}td{padding:4px 0;border-bottom:1px sol
 a{color:var(--acc)}
 </style></head><body><main>
 <h1>Inbox Shield</h1>
-<p class="sub">Check an inbound message before an assistant or a teammate acts on it. It removes text that tries to give instructions, masks personal data, routes the ticket and pulls out the key facts.</p>
+<p class="sub">Check an inbound message before an assistant or a teammate acts on it. It removes text that tries to give instructions, masks personal data, routes the ticket, pulls out the key facts and fills a ticket record you can copy.</p>
 <div class="grid">
 <div class="card"><h3 style="margin-top:0">Message</h3>
 <textarea id="t" maxlength="4000"></textarea>
@@ -203,7 +261,7 @@ a{color:var(--acc)}
 <div id="err" class="err"></div></div>
 <div class="card" id="out"><p style="color:var(--mute);margin:0">Pick an example or paste a message, then run it. Results appear here.</p></div>
 </div>
-<p class="foot">Built on the <a href="https://clocked.rezolve.ai/docs">Clocked API</a> (Guard, Protect, Decide, Extract). Messages here are synthetic examples. Demo is limited to 20 runs per hour per visitor and 300 per day overall. Detection can miss things, so keep a person in the loop for anything important. <a href="https://github.com/ArjunAJ7/inbox-shield">Source</a>.</p>
+<p class="foot">Built on the <a href="https://clocked.rezolve.ai/docs">Clocked API</a> (Guard, Protect, Decide, Extract, Fill). Messages here are synthetic examples. Demo is limited to 20 runs per hour per visitor and 300 per day overall. Detection can miss things, so keep a person in the loop for anything important. <a href="https://github.com/ArjunAJ7/inbox-shield">Source</a>.</p>
 </main>
 <script>
 const EX={
@@ -236,7 +294,27 @@ function render(d){
   h+='<h3>Filtered text (personal data masked)</h3><pre>'+esc(d.safe_text)+'</pre>';
   h+='<h3>Facts found</h3><table>';
   for(const k in d.facts){const f=d.facts[k];h+='<tr><td>'+esc(k.replace('_',' '))+'</td><td>'+(f?esc(f.value):'<span style="color:var(--mute)">not stated</span>')+'</td></tr>'}
-  h+='</table><p class="foot" style="margin-bottom:0">'+d.credits+' Clocked credits used for this run.</p>';
+  h+='</table>';
+  h+='<h3>Ticket record</h3>';
+  if(d.record){
+    const r=d.record;
+    const unk='<span style="color:var(--mute)">unknown</span>';
+    if(r.disagreements&&r.disagreements.length)h+='<div class="banner warn">Check with a person: '+r.disagreements.map(esc).join('; ')+'.</div>';
+    if(r.summary)h+='<p style="margin:0 0 6px">'+esc(r.summary)+'</p>';
+    h+='<table id="rectab">';
+    h+='<tr><td>Customer</td><td>'+(r.customer_name?esc(r.customer_name):unk)+'</td></tr>';
+    h+='<tr><td>Order / ticket</td><td>'+(r.order_id?esc(r.order_id):unk)+'</td></tr>';
+    h+='<tr><td>Product</td><td>'+(r.product?esc(r.product):unk)+'</td></tr>';
+    h+='<tr><td>Deadline</td><td>'+(r.deadline?esc(r.deadline):unk)+'</td></tr>';
+    h+='<tr><td>Category</td><td>'+(r.category?esc(r.category):unk)+'</td></tr>';
+    h+='<tr><td>Urgent</td><td>'+(r.urgent==null?unk:(r.urgent?'yes':'no'))+'</td></tr>';
+    h+='</table><div class="row"><button id="copyrec">Copy record</button></div>';
+  }else{
+    h+='<p style="margin:0;color:var(--mute)">Ticket record unavailable'+(d.record_error?' ('+esc(d.record_error)+')':'')+'. The results above are unaffected.</p>';
+  }
+  h+='<p class="foot" style="margin-bottom:0">'+d.credits+' Clocked credits used for this run.</p>';
+  const cb=$('copyrec');
+  if(cb)cb.onclick=()=>{const r=d.record;const t=['Customer: '+(r.customer_name||'unknown'),'Order/ticket: '+(r.order_id||'unknown'),'Product: '+(r.product||'unknown'),'Deadline: '+(r.deadline||'unknown'),'Category: '+(r.category||'unknown'),'Urgent: '+(r.urgent==null?'unknown':(r.urgent?'yes':'no')),'Summary: '+(r.summary||'')].join('\n');navigator.clipboard.writeText(t);cb.textContent='Copied';};
   $('out').innerHTML=h;
 }
 </script></body></html>`;

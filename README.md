@@ -13,10 +13,11 @@ You paste a message. Inbox Shield:
 2. **Protect** (`/pii`) masks names, emails, phones, addresses and card numbers in the cleaned text.
 3. **Decide** (`/decide`) routes the ticket (refund, shipping, technical, other) and says whether it is urgent, with probabilities.
 4. **Extract** (`/extract`) copies out the order or ticket number, the product and any deadline, verbatim.
+5. **Fill** (`/fill`) fills a structured ticket record from the masked text: customer, order number, product, deadline, category, urgency and a one-line summary, with a button to copy it into a tracker. Values are copied verbatim only - anything masked or not stated stays unknown. Category and urgency use the same definitions as the routing check, so the record can be cross-checked: if the two disagree, the page flags both answers instead of silently contradicting itself. If the Fill call fails, the rest of the results still render and the record card says it is unavailable. When nearly the whole message is removed as an attack, no record is filled at all.
 
-The output is a "filtered text" block (personal data masked, flagged sentences removed) that a person can review before an assistant uses it, plus the route, urgency and facts. The Clocked results change what the app does: flagged text is removed, personal data is masked, and the route and urgency decide where the ticket goes.
+The output is a "filtered text" block (personal data masked, flagged sentences removed) that a person can review before an assistant uses it, plus the route, urgency, facts and a copyable ticket record. The Clocked results change what the app does: flagged text is removed, personal data is masked, and the route and urgency decide where the ticket goes.
 
-Two Clocked calls per run (Guard first, then Protect, Decide and Extract as one pipeline on the cleaned text).
+Three Clocked calls per run (Guard first, then Protect, Decide and Extract as one pipeline on the cleaned text, then Fill on the masked text). Each run shows how many credits it used.
 
 ## Test it
 
