@@ -169,6 +169,31 @@ export async function triage(text, key) {
       summary: val('summary'),
       disagreements,
     };
+    // Verify the filled record before showing it; typed-field prompting is not a
+    // guarantee. (a) Extract fields must appear verbatim in the masked source text,
+    // otherwise the value is dropped as unsupported. (b) Every filled string field,
+    // including the generated summary, is scanned for personal-data patterns the
+    // masking step might have missed (email, card-length digit runs, 9+ digit
+    // sequences); a field that matches is blanked. Every intervention is listed in
+    // record.notes so the page can say exactly what it did.
+    const notes = [];
+    const hay = (masked || '').toLowerCase().replace(/\s+/g, ' ');
+    const emailRe = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+    const cardRe = /\b(?:\d[ -]?){13,16}\b/;
+    const longDigits = (s) => (s.match(/[\d][\d .()\-]{7,}\d/g) || []).some((m) => m.replace(/\D/g, '').length >= 9);
+    const looksPersonal = (s) => emailRe.test(s) || cardRe.test(s) || longDigits(s);
+    const verbatim = (s) => hay.includes(String(s).trim().toLowerCase().replace(/\s+/g, ' '));
+    for (const k of ['customer_name', 'order_id', 'product', 'deadline']) {
+      const v = record[k];
+      if (v == null) continue;
+      if (looksPersonal(String(v))) { record[k] = null; notes.push(k + ': value looked like personal data, left blank'); }
+      else if (!verbatim(v)) { record[k] = null; notes.push(k + ': filled value not found verbatim in the message, left blank'); }
+    }
+    if (record.summary != null && looksPersonal(String(record.summary))) {
+      record.summary = null;
+      notes.push('summary: removed because it contained what looked like personal data');
+    }
+    record.notes = notes;
   } catch (e) {
     record_error = String(e.message || e);
   }
@@ -300,6 +325,7 @@ function render(d){
     const r=d.record;
     const unk='<span style="color:var(--mute)">unknown</span>';
     if(r.disagreements&&r.disagreements.length)h+='<div class="banner warn">Check with a person: '+r.disagreements.map(esc).join('; ')+'.</div>';
+    if(r.notes&&r.notes.length)h+='<p style="margin:0 0 6px;color:var(--mute)">While checking the record: '+r.notes.map(esc).join('; ')+'.</p>';
     if(r.summary)h+='<p style="margin:0 0 6px">'+esc(r.summary)+'</p>';
     h+='<table id="rectab">';
     h+='<tr><td>Customer</td><td>'+(r.customer_name?esc(r.customer_name):unk)+'</td></tr>';
